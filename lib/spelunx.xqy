@@ -157,6 +157,46 @@ declare function spx:node-sketch(
     </spx:node-report>
 };
 
+(: 50 character ruler  ======================> :)
+
+declare function spx:histogram(
+  $e as xs:QName,
+  $sample-size as  xs:unsignedInt?,
+  $bounds as xs:double+
+) {
+  let $n := ($sample-size, 1000)[1]
+  let $samp := spx:random-sample($n)
+  let $full-population := spx:est-docs()
+  let $multiplier := ($full-population div $n)
+  let $ocrs := $samp//*[node-name(.) eq $e]
+  let $vals := data($ocrs)
+  let $number-vals := $vals
+    [. castable as xs:double]!xs:double(.)
+  let $bucket-tops := ($bounds, xs:float("INF"))
+  for $bucket-top at $idx in $bucket-tops
+  let $bucket-bottom :=
+    if ($idx eq 1)
+    then xs:float("-INF")
+    else $bucket-tops[position() eq $idx - 1]
+  let $samp-count := count($number-vals
+    [. lt $bucket-top][. ge $bucket-bottom])
+  let $p := $samp-count div $n
+  let $moe := 1 div math:sqrt($sample-size)
+  let $SE := math:sqrt(($p * (1 - $p)) div $n)
+  let $est-count := $samp-count * $multiplier
+  let $error := $SE * $full-population
+  let $est-top := $est-count + $error
+  let $est-bot := $est-count - $error
+  return
+    <histogram-value
+      ge="{$bucket-bottom}"
+      lt="{$bucket-top}"
+      sample-count="{$samp-count}"
+      est-count="{$est-count}"
+      est-range="{$est-bot} to {$est-top}"
+      error="{$error}"/>
+};
+
 declare function spx:report(
   $options as element(spx:options),
   $facets as xs:string+,
