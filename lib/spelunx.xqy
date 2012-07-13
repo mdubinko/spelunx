@@ -1,106 +1,172 @@
 xquery version "1.0-ml";
+(: 1.0-ml includes namespace axis :)
 
-(: Copyright 2002-2011 MarkLogic Corporation.  All Rights Reserved. :)
+(: Copyright 2012 Micah Dubinko :)
 
-module namespace exp = "http://marklogic.com/unsupported/experimental";
+(:
 
-declare default function namespace "http://www.w3.org/2005/xpath-functions";
-declare namespace opt = "http://marklogic.com/appservices/search";
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-import module namespace debug = "http://marklogic.com/debug" at "../utils/debug.xqy";
+     http://www.apache.org/licenses/LICENSE-2.0
 
-declare option xdmp:mapping "false";
-
-(: Experimental Search API features: these may change or be removed without notice :)
-
-
-(: experimental: run a report, not necessarily based on range indexes
-
-Usage:
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 :)
 
-declare function exp:data-sketch(
-    $sample-size as xs:unsignedInt?
-) {
-    let $n := ($sample-size, 1000)[1]
-    let $xml-docs := xdmp:estimate(collection()/*)
-    let $text-docs := xdmp:estimate(collection()/text())
-    let $binary-docs := xdmp:estimate(collection()/binary())
+module namespace spx = "http://dubinko.info/spelunx";
 
-    let $sample := cts:search(collection(), cts:and-query(()), "score-random")[position() le $n]
-    let $clarknames := distinct-values( for $doc in $sample return ($doc/*/xdmp:key-from-QName(node-name(.))) )
-    let $qnames := for $cn in $clarknames return xdmp:QName-from-key($cn)
-    let $all-namespaces := distinct-values($sample//namespace::*)
-    let $leaf-elems := $sample//*[empty(*)]
-    let $leaf-elems-text := $leaf-elems[text()]
-    let $leaf-elems-long := $leaf-elems-text[string-length(.) ge 10]
-    let $leaf-elems-short := $leaf-elems-text[string-length(.) le 4]
-    let $all-dates := distinct-values($leaf-elems-long[. castable as xs:dateTime]/xdmp:key-from-QName(node-name(.)))
-    let $near-dates := distinct-values($leaf-elems-long[matches(local-name(.), '[Dd]ate')][not(. castable as xs:dateTime)]/xdmp:key-from-QName(node-name(.)))
-    let $all-years := distinct-values($leaf-elems-short[matches(., "^(19\d\d)|(20\d\d)$")]/xdmp:key-from-QName(node-name(.)))
-    let $all-smallnum := distinct-values($leaf-elems-short[. castable as xs:double]/xdmp:key-from-QName(node-name(.)))
-        return
-        <exp:data-sketch>
-           <exp:xml-doc-count>{$xml-docs}</exp:xml-doc-count>
-           <exp:text-doc-count>{$text-docs}</exp:text-doc-count>
-           <exp:binary-doc-count>{$binary-docs}</exp:binary-doc-count>
-           { for $cn at $pos in $clarknames return <exp:root-elem name="{$cn}" count="{xdmp:estimate(cts:search(collection(),cts:element-query($qnames[$pos],cts:and-query(()))))}" /> }
-           { for $ns in $all-namespaces return <exp:namespace-seen>{$ns}</exp:namespace-seen> }
-           { for $dt in $all-dates return <exp:possible-date>{$dt}</exp:possible-date> }
-           { for $dt in $near-dates return <exp:possible-date-with-cleanup>{$dt}</exp:possible-date-with-cleanup> }
-           { for $yr in $all-years return <exp:possible-year>{$yr}</exp:possible-year> }
-           { for $sn in $all-smallnum return <exp:small-number>{$sn}</exp:small-number> }
-           <exp:mean-elements-per-doc>{count($sample//*) div count($sample/*)}</exp:mean-elements-per-doc>
+declare default function namespace "http://www.w3.org/2005/xpath-functions";
 
-        </exp:data-sketch>
+declare option xdmp:mapping "false";
+
+declare function spx:random-sample($count as xs:integer) as document-node()* {
+  cts:search(collection(), cts:and-query(()), "score-random")[position() le $count]
 };
 
-declare function exp:node-sketch(
-    $elem as xs:QName,
-    $sample-size as  xs:unsignedInt?
-) {
-    let $n := ($sample-size, 1000)[1]
-    let $sample := cts:search(collection(), cts:and-query(()), "score-random")[position() le $n]
-    
-    let $occurrences := $sample//*[node-name(.) eq $elem]
-    let $values := data($occurrences)
-    let $number-values := $values[. castable as xs:double]
-    let $date-values := $values[. castable as xs:dateTime]
-    let $blank-values := $values[matches(., "^\s*$")]
-    let $parents := distinct-values($occurrences/node-name(..) ! xdmp:key-from-QName(.))
-    let $children := distinct-values($occurrences/* ! xdmp:key-from-QName(node-name(.)))
-    let $attributes := distinct-values($occurrences/@* ! xdmp:key-from-QName(node-name(.)))
-    let $roots := distinct-values($occurrences/root()/* ! xdmp:key-from-QName(node-name(.)))
-    let $paths := distinct-values($occurrences/xdmp:path(.))
-    
-    
-    return
-        <exp:node-report>
-            <exp:estimate-count>{xdmp:estimate(cts:search(collection(),cts:element-query($elem,cts:and-query(()))))}</exp:estimate-count>
-            <exp:sample-count>{count($occurrences)}</exp:sample-count>
-            <exp:number-count>{count($number-values)}</exp:number-count>
-            <exp:date-count>{count($date-values)}</exp:date-count>
-            <exp:blank-count>{count($blank-values)}</exp:blank-count>
-            { for $parent in $parents return <exp:element-parent>{$parent}</exp:element-parent> }
-            { for $root in $roots return <exp:root-element>{$root}</exp:root-element> }
-            { for $path in $paths return <exp:element-path>{$path}</exp:element-path> }
-            <exp:min-value>{min($number-values)}</exp:min-value>
-            <exp:max-value>{max($number-values)}</exp:max-value>
-            { if (exists($values)) then <exp:mean-value>{sum($number-values) div count($number-values)}</exp:mean-value> else () }
-        </exp:node-report>
+declare function spx:formatq($qname as xs:QName) as xs:string {
+  xdmp:key-from-QName($qname)
 };
 
-declare function exp:report(
-    $options as element(opt:options),
-    $facets as xs:string+,
-    $sample-size as xs:unsignedInt?
+declare function spx:QName($cname as xs:string) as xs:QName {
+  xdmp:QName-from-key($cname)
+};
+
+declare function spx:name($node as node()) as xs:string {
+  spx:formatq(node-name($node))
+};
+
+declare function spx:est-docs() {
+  xdmp:estimate(collection()/*)
+};
+
+declare function spx:est-text-docs() {
+  xdmp:estimate(collection()/text())
+};
+
+declare function spx:est-binary-docs() {
+  xdmp:estimate(collection()/binary())
+};
+
+declare function spx:est-by-QName($qn as xs:QName) {
+  xdmp:estimate(cts:search(collection(),cts:element-query($qn,cts:and-query(()))))
+};
+
+declare function spx:node-path($node as node()) {
+  xdmp:path($node)
+};
+
+(: 50 character ruler  ======================> :)
+
+
+declare function spx:data-sketch(
+  $sample-size as xs:unsignedInt?
+) {
+  let $dv := distinct-values#1
+  let $n := ($sample-size, 1000)[1]
+  let $xml-docs := spx:est-docs()
+  let $text-docs := spx:est-text-docs()
+  let $binary-docs := spx:est-binary-docs()
+
+  let $samp := spx:random-sample($n)
+  let $cnames := $dv($samp/*/spx:name(.))
+  let $all-ns := $dv($samp//namespace::*)
+  let $leafe := $samp//*[empty(*)]
+  let $leafetxt := $leafe[text()]
+  let $leafe-long := $leafetxt
+    [string-length(.) ge 10]
+  let $leafe-short := $leafetxt
+    [string-length(.) le 4]
+  let $dates := $dv($leafe-long
+    [. castable as xs:dateTime]/spx:name(.))
+  let $near-dates := $dv($leafe-long
+    [matches(local-name(.), '[Dd]ate')]
+    [not(. castable as xs:dateTime)]/spx:name(.))
+  let $all-years := $dv($leafe-short
+    [matches(., "^(19|20)\d\d$")]/spx:name(.))
+  let $all-smallnum := $dv($leafe-short
+    [. castable as xs:double]/spx:name(.))
+  let $epd := count($samp//*) div count($samp/*)
+  return
+    <spx:data-sketch
+      xml-doc-count="{$xml-docs}"
+      text-doc-count="{$text-docs}"
+      binary-doc-count="{$binary-docs}"
+      elements-per-doc="{$epd}">
+      {$cnames!<spx:root-elem
+        name="{.}"
+        count="{spx:est-by-QName(spx:QName(.))}"/>
+      }
+      {$all-ns!<spx:ns-seen>{.}</spx:ns-seen>}
+      {$dates!<spx:date>{.}</spx:date>}
+      {$near-dates!<spx:almost-date>{.}</spx:almost-date>}
+      {$all-years!<spx:year>{.}</spx:year>}
+      {$all-smallnum!<spx:small-num>{.}</spx:small-num>}
+    </spx:data-sketch>
+};
+
+
+
+(: 50 character ruler  ======================> :)
+
+declare function spx:node-sketch(
+  $e as xs:QName,
+  $sample-size as  xs:unsignedInt?
+) {
+  let $dv := distinct-values#1
+  let $n := ($sample-size, 1000)[1]
+  let $samp := spx:random-sample($n)
+
+  let $ocrs := $samp//*[node-name(.) eq $e]
+  let $vals := data($ocrs)
+  let $number-vals := $vals
+    [. castable as xs:double]
+  let $nv := $number-vals
+  let $date-values := $vals
+    [. castable as xs:dateTime]
+  let $blank-vals := $vals[matches(., "^\s*$")]
+  let $parents := $dv(
+    $ocrs/node-name(..)!spx:formatq(.))
+  let $children := $dv($ocrs/*!spx:name(.))
+  let $attrs := $dv($ocrs/@*!spx:name(.))
+  let $roots := $dv($ocrs/root()/*!spx:name(.))
+  let $paths := $dv($ocrs/spx:node-path(.))
+  return
+    <spx:node-report
+      estimate-count="{spx:est-by-QName($e)}"
+      sample-count="{count($ocrs)}"
+      number-count="{count($number-vals)}"
+      date-count="{count($date-values)}"
+      blank-count="{count($blank-vals)}">
+      {$parents!<spx:parent>{.}</spx:parent>}
+      {$roots!<spx:root>{.}</spx:root>}
+      {$paths!<spx:path>{.}</spx:path>}
+      <spx:min>{min($number-vals)}</spx:min>
+      <spx:max>{max($number-vals)}</spx:max>
+      {if (exists($vals)) then
+      <spx:mean>
+        {sum($nv) div count($nv)}
+      </spx:mean>
+      else ()
+      }
+    </spx:node-report>
+};
+
+declare function spx:report(
+  $options as element(spx:options),
+  $facets as xs:string+,
+  $sample-size as xs:unsignedInt?
 ) as element()* {
-    let $n := ($sample-size, 1000)[1]
-    let $sample := cts:search(collection(), cts:and-query(()), "score-random")[position() le $n]
-    return
-        <opt:report>
+  let $n := ($sample-size, 1000)[1]
+  let $samp := spx:random-sample($n)
+  return
+    <spx:report>
 
 
-        </opt:report>
+    </spx:report>
 };
